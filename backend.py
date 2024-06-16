@@ -62,6 +62,10 @@ def get_db() -> Generator:
 db_dependency = Annotated[Tuple[MySQLConnection, MySQLCursorDict], Depends(get_db)]
 user_dependency = Annotated[dict, Depends(get_current_user)]
 # ----------------------------------------Routes--------------------------------------------
+@app.get("/")
+def index():
+    return "Hello! Access our documentation by adding '/docs' to the url above"
+
 @app.get("/test", status_code=status.HTTP_200_OK)
 async def user(user:user_dependency):
     if user is None:
