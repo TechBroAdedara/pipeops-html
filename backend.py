@@ -137,6 +137,7 @@ def validate_geofence(user_matric: str, geofence_name: str, lat: float, long: fl
     else:
         return {"message": "Geofence type not supported"}
 
+
 # Endpoint to list all attendance records
 @app.get("/listAttendance")
 def list_attendance(db_tuple:db_dependency):
