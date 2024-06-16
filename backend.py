@@ -175,6 +175,7 @@ def validate_geofence(user_matric: str,fence_code:str, lat: float, long: float, 
             else:
                     return {"message": "User is not within the geofence"}
         else:
+
             return "Geofence is not open"
         
     except errors.IntegrityError as e:
@@ -182,6 +183,7 @@ def validate_geofence(user_matric: str,fence_code:str, lat: float, long: float, 
             return "User has already signed attendance for this class"
         else:
             raise HTTPException(status_code=500, detail="Database error")
+        
         
 # Endpoint to list all attendance records
 @app.get("/listAttendance")
