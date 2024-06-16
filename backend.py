@@ -1,4 +1,7 @@
 import json
+import random
+import string
+from datetime import datetime
 import math
 from typing import List, Generator, Annotated,Tuple
 
@@ -7,6 +10,7 @@ from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from mysql.connector.connection import MySQLConnection
 from mysql.connector.cursor import MySQLCursorDict
+from mysql.connector import errors
 from passlib.context import CryptContext
 
 import auth
@@ -36,6 +40,9 @@ def check_user_in_circular_geofence(user_lat, user_lng, geofence):
     return distance <= radius
 
 
+def generate_alphanumeric_code(length=6):
+    characters = string.ascii_letters + string.digits
+    return ''.join(random.choice(characters) for _ in range(length))
 # ----------------------------------------Password Hashing--------------------------------------------
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -83,20 +90,28 @@ def get_users(db_tuple:db_dependency):
 
 # Endpoint to create Geofence
 @app.post("/geofences/")
-def create_geofence(geofence: GeofenceCreate, db_tuple: db_dependency):
+def create_geofence(geofence: GeofenceCreate, db_tuple = Depends(get_db)):
     db, cursor = db_tuple
-    cursor.execute("SELECT * FROM Geofences WHERE name = %s", (geofence.name,))
+
+    cursor.execute("SELECT * FROM Geofences WHERE name = %s AND DATE(start_time) = %s", (geofence.name, geofence.start_time.date(),))
     db_geofence = cursor.fetchone()
     if db_geofence:
-        raise HTTPException(status_code=400, detail="Geofence already exists")
-
-    cursor.execute(
-        "INSERT INTO Geofences (name, latitude, longitude, radius, fence_type) VALUES (%s, %s, %s, %s, %s)",
-        (geofence.name, geofence.latitude, geofence.longitude, geofence.radius, geofence.fence_type)
-    )
-    db.commit()
-    return {"id": cursor.lastrowid, "name": geofence.name}
-
+        raise HTTPException(status_code=400, detail= f"Geofence with this name aalready exists for today and is ending {db_geofence["end_time"]}")
+    
+    try:
+        code = generate_alphanumeric_code()
+        cursor.execute(
+            "INSERT INTO Geofences (fence_code, name, latitude, longitude, radius, fence_type, start_time, end_time) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (code, geofence.name, geofence.latitude, geofence.longitude, geofence.radius, geofence.fence_type, geofence.start_time, geofence.end_time)
+        )
+        db.commit()
+        return {"Code": code, "name": geofence.name}
+    except errors.IntegrityError as e:
+        if e.errno == 1062:  # Duplicate entry error code
+            raise HTTPException(status_code=400, detail="Geofence with this code already exists")
+        else:
+            raise HTTPException(status_code=500, detail="Database error")
+        
 # Endpoint to get a list of Geofences
 @app.get("/get_geofences")
 def list_geofences(db_tuple:db_dependency):
@@ -105,39 +120,71 @@ def list_geofences(db_tuple:db_dependency):
     geofences = cursor.fetchall()
     return {"geofences": geofences}
 
+@app.delete("/delete_geofence/{geofence_name}", response_model=str)
+async def delete_geofence(geofence_name: str, db_tuple: db_dependency):
+    db, cursor = db_tuple
+    try:
+        # Check if geofence exists
+        cursor.execute("SELECT * FROM Geofences WHERE name = %s", (geofence_name,))
+        geofence = cursor.fetchone()
+        if geofence is None:
+            raise HTTPException(status_code=404, detail="Geofence not found")
+
+        # Delete geofence
+        cursor.execute("DELETE FROM Geofences WHERE name = %s", (geofence_name,))
+        db.commit()
+
+        return f"Successfully deleted {geofence_name} from the list of available Geofences"
+
+    except Exception as e:
+        # Handle exceptions
+        print(f"Error deleting geofence: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 # Endpoint to validate user attendance and store in database
 @app.get("/validateGeofence/")
-def validate_geofence(user_matric: str, geofence_name: str, lat: float, long: float, db_tuple: db_dependency):
+def validate_geofence(user_matric: str,fence_code:str, lat: float, long: float, db_tuple: db_dependency):
     db, cursor = db_tuple
+
+    today = datetime.now() # Get current datetime
+
+    # Check if user exists
     cursor.execute("SELECT * FROM Users WHERE user_matric = %s", (user_matric,))
     db_user = cursor.fetchone()
-
-    cursor.execute("SELECT * FROM AttendanceRecords WHERE user_matric = %s", (user_matric,))
-    db_attendance = cursor.fetchone()
-
     if db_user is None:
+        print("No user")
         raise HTTPException(status_code=404, detail="User not found")
-    if db_attendance:
-        return f"Attendance for user {db_user['user_matric']} is already recorded."
-
-    cursor.execute("SELECT * FROM Geofences WHERE name = %s", (geofence_name,))
+    
+    # Check if geofence exists
+    cursor.execute("SELECT * FROM Geofences WHERE fence_code = %s", (fence_code,))
     geofence = cursor.fetchone()
     if not geofence:
-        raise HTTPException(status_code=404, detail="Geofence not found")
-    if geofence['fence_type'] == "circle":
-        if check_user_in_circular_geofence(lat, long, geofence):
-            cursor.execute(
-                "INSERT INTO AttendanceRecords (user_matric, geofence_name) VALUES (%s, %s)",
-                (user_matric, geofence_name)
-            )
-            db.commit()
-            return {"message": "Attendance recorded successfully"}
+        print("no fence")
+        raise HTTPException(status_code=404, detail=f"Geofence code: {fence_code} not found")
+    
+    try:
+        if geofence["start_time"] <= today <= geofence["end_time"]: #if geofence is still open
+            if check_user_in_circular_geofence(lat, long, geofence): # Process to check if user is in geofence and record attendance
+                matric_fence_code = db_user["user_matric"] + geofence["fence_code"]
+                cursor.execute(
+                    "INSERT INTO AttendanceRecords (user_matric, fence_code, timestamp, matric_fence_code) VALUES (%s, %s, %s, %s)",
+                    (user_matric, fence_code, datetime.now(), matric_fence_code,)
+                )
+                db.commit()
+                return {"message": "Attendance recorded successfully"}
+            else:
+                    return {"message": "User is not within the geofence"}
         else:
-            return {"message": "User is not within the geofence"}
-    else:
-        return {"message": "Geofence type not supported"}
 
-
+            return "Geofence is not open"
+        
+    except errors.IntegrityError as e:
+        if e.errno == 1062:
+            return "User has already signed attendance for this class"
+        else:
+            raise HTTPException(status_code=500, detail="Database error")
+        
+        
 # Endpoint to list all attendance records
 @app.get("/listAttendance")
 def list_attendance(db_tuple:db_dependency):
