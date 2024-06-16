@@ -177,6 +177,7 @@ def validate_geofence(user_matric: str,fence_code:str, lat: float, long: float, 
         else:
             return "Geofence is not open"
         
+        
     except errors.IntegrityError as e:
         if e.errno == 1062:
             return "User has already signed attendance for this class"
