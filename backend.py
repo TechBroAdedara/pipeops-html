@@ -84,9 +84,10 @@ async def user(user:user_dependency):
 @app.get("/get_users")
 def get_users(db_tuple:db_dependency):
     db, cursor = db_tuple
-    cursor.execute("SELECT * FROM Users")
-    result = cursor.fetchall()
-    return result
+    cursor.execute("SELECT user_matric, username, role FROM Users")
+    rows = cursor.fetchall()
+    user_list = [f"Matric Number: {row["user_matric"]}, Username: {row["username"]}, Role: {row["role"]}" for row in rows]
+    return user_list
 
 # Endpoint to create Geofence
 @app.post("/geofences/")
