@@ -79,7 +79,7 @@ async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm,
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate user."
         )
-    token = create_access_token(user['username'], user['user_matric'], timedelta(minutes=20))
+    token = create_access_token(user['username'], user['role'], timedelta(minutes=20))
     return {"access_token": token, "token_type": "bearer"}
 
 def authenticate_user(username: str, password: str, cursor: MySQLCursorDict):
@@ -92,8 +92,8 @@ def authenticate_user(username: str, password: str, cursor: MySQLCursorDict):
         return False
     return user
 
-def create_access_token(username: str, user_matric: str, expires_delta: timedelta):
-    encode = {"sub": username, "id": user_matric}
+def create_access_token(username: str, role: str, expires_delta: timedelta):
+    encode = {"sub": username, "id": role}
     expires = datetime.utcnow() + expires_delta
     encode.update({"exp": expires})
     return jwt.encode(encode, SECRET_KEY, algorithm=ALGORITHM)
@@ -104,11 +104,11 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_bearer)]):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get('sub')
-        user_matric: str = payload.get('id')
-        if username is None or user_matric is None:
+        role: str = payload.get('id')
+        if username is None or role is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                                 detail="Could not validate user")
-        return {"username": username, "id": user_matric}
+        return {"username": username, "id": role}
     except JWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="Could not validate user.")
